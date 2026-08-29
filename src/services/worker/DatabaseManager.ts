@@ -10,6 +10,9 @@ import { USER_SETTINGS_PATH, DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import type { DBSession } from '../worker-types.js';
 
+// weblapp delta (DELTA.md): nothing leaves this machine.
+const WEBLAPP_CLOUD_SYNC_DISABLED = true;
+
 export class DatabaseManager {
   private db: Database | null = null;
   private sessionStore: SessionStore | null = null;
@@ -38,7 +41,13 @@ export class DatabaseManager {
     // Cloud sync is active iff token, user id, and Hub URL are all non-empty.
     // Inactive installs get null so the write-site `getCloudSync()?.notify()`
     // nudges are free no-ops.
+    // weblapp delta: cloud sync is HARD OFF in this fork — see DELTA.md.
+    // Upstream activates it when token+user+hub are all set; a single wrong
+    // settings edit would turn it on. Our trees carry tracked signing secrets
+    // (measured 2026-08-29), and an "everything capturer" would ship them.
+    // Config can be flipped by accident; code cannot.
     if (
+      !WEBLAPP_CLOUD_SYNC_DISABLED &&
       settings.CLAUDE_MEM_CLOUD_SYNC_TOKEN !== '' &&
       settings.CLAUDE_MEM_CLOUD_SYNC_USER_ID !== '' &&
       settings.CLAUDE_MEM_CLOUD_SYNC_HUB_URL.trim() !== ''

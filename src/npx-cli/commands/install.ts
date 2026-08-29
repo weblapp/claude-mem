@@ -50,6 +50,9 @@ import {
   type CmemProTrialDays,
 } from '../cmem-pro-costs.js';
 
+// weblapp delta (DELTA.md): no funnel, no email, no proxied provider.
+const WEBLAPP_TRIAL_FUNNEL_DISABLED = true;
+
 function getSetting<K extends keyof SettingsDefaults>(key: K): SettingsDefaults[K] {
   return SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH)[key];
 }
@@ -2045,7 +2048,12 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
   // email, poll, or override a provider the operator asked for by name.
   const storedTrialState = readStoredTrialState();
   const trialDays = resolveInstallerTrialDays(storedTrialState);
-  const trialPairing = options.provider
+  // weblapp delta: the cmem Pro trial funnel is OFF — see DELTA.md. Upstream
+  // makes this the first interaction of the install: an email POSTs to cmem.ai,
+  // an account is created server-side, and on success it rewrites the AI
+  // provider to CMEM_PRO_BASE_URL — so summarisation itself would run through
+  // their proxy. We keep the provider local and ask nothing.
+  const trialPairing = (options.provider || WEBLAPP_TRIAL_FUNNEL_DISABLED)
     ? null
     : await promptProTrialOptIn(version, trialDays, storedTrialState);
 
