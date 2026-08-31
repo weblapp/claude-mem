@@ -41,6 +41,60 @@ We deliberately did **not** delete `CloudSync.ts`, `CloudSyncRoutes.ts` or the s
 delta into a permanent merge conflict. A flag at the single construction site is smaller, safer
 and easier to re-apply.
 
+### The cost of the rename: a fallback chain that pointed at nothing
+
+**Added 2026-08-31. This is the fork's first change to the hooks, and it exists because of the
+rename below, not in spite of it.**
+
+Every hook, the Codex Windows launcher and the MCP launcher resolve the plugin root from
+`$CLAUDE_PLUGIN_ROOT` (or `$PLUGIN_ROOT`), then fall back to scanning
+`$_C/plugins/cache/thedotmack/claude-mem/<version>/` and `$_C/plugins/marketplaces/thedotmack/plugin`.
+Upstream added that chain deliberately, in `d8eb2fa9` (#1533, 2026-04-01): *"The fallback path for
+CLAUDE_PLUGIN_ROOT was pointing to the old marketplaces install location which no longer exists."*
+It is load-bearing by design — `src/build/hook-shell-template.ts` says so in its header.
+
+`thedotmack` there is the **marketplace name**, and we renamed ours. Measured 2026-08-31:
+
+```
+$ ls -d ~/.claude/plugins/cache/thedotmack ~/.claude/plugins/marketplaces/thedotmack
+ls: /Users/weblapp/.claude/plugins/cache/thedotmack: No such file or directory
+ls: /Users/weblapp/.claude/plugins/marketplaces/thedotmack: No such file or directory
+```
+
+Running the discovery prelude of the `UserPromptSubmit` hook standalone, with both variables
+unset, on 13.17.2-weblapp.1:
+
+```
+$ env -u CLAUDE_PLUGIN_ROOT -u PLUGIN_ROOT bash discovery.sh
+claude-mem: plugin scripts not found      # stderr, exit 1
+```
+
+So the whole capture chain rested on one environment variable with a backup that could not fire.
+`CLAUDE_PLUGIN_ROOT` **is** set for hooks declared in a plugin's `hooks/hooks.json`, so this was
+latent, not live — but it is set *only* there. Copy one of these commands into
+`~/.claude/settings.json` or a project `.claude/settings.json`, or run the Codex hooks under a
+host that never sets it, and the fallback is all there is.
+
+Two changes, both in the generator (`src/build/hook-shell-template.ts`) so `npm run build` cannot
+revert them:
+
+- **`MARKETPLACE_DIRS = ['weblapp-claude-mem', 'thedotmack']`.** Both names are scanned, ours
+  first, each as its own version-sorted stage. Not one merged sort: `13.17.2` sorts ahead of
+  `13.17.2-weblapp.1` (release beats prerelease), so a machine carrying both would fall back to
+  the build whose outbound paths this file exists to remove.
+- **A discovery failure now leaves a trace on disk.** Every claude-mem log line is written by the
+  worker, which lives *behind* the resolution that just failed — so the old `echo >&2; exit 1`
+  left no log line and no `sdk_sessions` row, and a capturer that captured nothing looked exactly
+  like a quiet day. The prelude now appends one worker-format line to
+  `${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}/logs/claude-mem-<date>.log` before exiting. Exit
+  stays **1, not 2**: on `UserPromptSubmit` exit 2 erases the user's prompt, and losing the prompt
+  because the capturer is missing is the worse trade.
+
+This grows the delta, which the last section of this file calls a warning. It is the right kind:
+the change is a consequence of a decision already recorded here, and the upstream-shaped half
+(scan a list of marketplace names instead of one hardcoded one, log before dying) belongs upstream
+as a PR.
+
 ### Version suffix
 
 The fork carries `-weblapp.N` on upstream's version (`13.17.2-weblapp.1`), synced across
@@ -98,6 +152,10 @@ that writes summaries into git.
 
 ## What we did not change
 
-Everything else: the hooks, the SQLite schema, Chroma search, the MCP search tools
+Everything else: the SQLite schema, Chroma search, the MCP search tools
 (`search` / `timeline` / `get_observations`), the worker, the viewer. Those are why we chose this
 project instead of writing our own.
+
+The hooks were on this list until 2026-08-31 — see "The cost of the rename" above. What changed
+there is the plugin-root *fallback list* and what happens when it comes up empty; the hook events,
+their payloads, their ordering and everything they call are still upstream's.

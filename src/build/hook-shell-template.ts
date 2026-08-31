@@ -17,11 +17,40 @@
  * The fallback chain ORDER is contractual and must not change:
  *   1. ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}   (host-injected env)
  *   2. (mcp only) $PWD/plugin, $PWD               (repo/dev checkout)
- *   3. cache directories (highest version first, .orphaned_at dirs skipped)
- *   4. $_C/plugins/marketplaces/thedotmack/plugin (marketplace install)
+ *   3. cache directories, per MARKETPLACE_DIRS entry in order (highest version
+ *      first WITHIN an entry, .orphaned_at dirs skipped)
+ *   4. $_C/plugins/marketplaces/<dir>/plugin, same order (marketplace install)
  */
 
 export type ShellTemplateHost = 'claude-code' | 'claude-code-setup' | 'codex-cli' | 'mcp';
+
+/**
+ * Marketplace directory names that may hold this plugin, in PRIORITY order.
+ *
+ * Claude Code installs to `plugins/cache/<marketplace>/<plugin>/<version>/` and
+ * `plugins/marketplaces/<marketplace>/`, where `<marketplace>` is the `name`
+ * field of `.claude-plugin/marketplace.json` — NOT the plugin name. A fork that
+ * renames its marketplace therefore renames its own fallback paths.
+ *
+ * This fork renamed `thedotmack` -> `weblapp-claude-mem` (DELTA.md), which left
+ * every hardcoded `thedotmack` fallback pointing at a directory that does not
+ * exist here. Measured 2026-08-31 on this machine:
+ *
+ *   $ ls -d ~/.claude/plugins/cache/thedotmack ~/.claude/plugins/marketplaces/thedotmack
+ *   ls: /Users/weblapp/.claude/plugins/cache/thedotmack: No such file or directory
+ *   ls: /Users/weblapp/.claude/plugins/marketplaces/thedotmack: No such file or directory
+ *
+ * so the whole chain collapsed to step 1 — one env var with no working backup.
+ *
+ * Each entry is enumerated as its OWN stage: versions rank within a marketplace,
+ * never across marketplaces. Merging them into a single `sort -r` would rank
+ * upstream's `13.17.2` above this fork's `13.17.2-weblapp.1` (release sorts ahead
+ * of prerelease), so a machine carrying both would silently fall back to the
+ * build whose outbound paths this fork exists to remove. Per-stage enumeration
+ * also matches what buildMcpNodeLauncher and buildCodexWindowsCommand already do
+ * (each cache root contributes its own sorted block, spread in array order).
+ */
+export const MARKETPLACE_DIRS = ['weblapp-claude-mem', 'thedotmack'] as const;
 
 export interface ShellTemplateOptions {
   /** Host whose spawn contract / PATH prelude applies. */
@@ -119,9 +148,10 @@ function candidateBlock(options: ShellTemplateOptions): string {
   }
 
   const extraCacheRoots = isMcp && options.mcpExtraCacheRoots ? options.mcpExtraCacheRoots : [];
-  const allGlobs = [...extraCacheRoots, '$_C/plugins/cache/thedotmack/claude-mem']
-    .map((root) => `"${root}"/[0-9]*/`)
-    .join(' ');
+  const cacheRoots = [
+    ...extraCacheRoots,
+    ...MARKETPLACE_DIRS.map((dir) => `$_C/plugins/cache/${dir}/claude-mem`),
+  ];
   // Cache dirs ranked by VERSION descending (zero-padded major.minor.patch
   // key, release ahead of prerelease at the same base), skipping dirs Claude
   // Code stamped with .orphaned_at. Mirrors compareVersionsDescending in
@@ -129,21 +159,33 @@ function candidateBlock(options: ShellTemplateOptions): string {
   // identically (by version, never mtime) is the restart-storm invariant.
   // (The former `ls -dt` mtime order let an orphan stamp on the OLD version
   // dir make it "newest": the 2026-07-22 restart storm.)
-  lines.push(
-    `for _V in ${allGlobs}; do ` +
-    `[ -d "$_V" ] || continue; [ -e "\${_V}.orphaned_at" ] && continue; ` +
-    `_B=\${_V%/}; _B=\${_B##*/}; ` +
-    // Balanced (pattern) case form: an unmatched `)` inside the enclosing
-    // $(...) command substitution is a POSIX parser error.
-    `case "$_B" in (*-*) _G=0;; (*) _G=1;; esac; ` +
-    `_N=\${_B%%-*}; _M1=\${_N%%.*}; ` +
-    `case "$_N" in (*.*) _T=\${_N#*.};; (*) _T=0;; esac; _M2=\${_T%%.*}; ` +
-    `case "$_T" in (*.*) _U=\${_T#*.};; (*) _U=0;; esac; _M3=\${_U%%.*}; ` +
-    `_M1=\${_M1%%[!0-9]*}; _M2=\${_M2%%[!0-9]*}; _M3=\${_M3%%[!0-9]*}; ` +
-    `printf '%08d%08d%08d%d %s\\n' "\${_M1:-0}" "\${_M2:-0}" "\${_M3:-0}" "$_G" "$_V"; ` +
-    `done 2>/dev/null | sort -r | sed 's/^[^ ]* //';`
-  );
-  lines.push(`printf '%s\\n' "$_C/plugins/marketplaces/thedotmack/plugin";`);
+  //
+  // One loop PER cache root, each with its own `sort -r`, so ranking is by
+  // version within a root and by root order across roots. See MARKETPLACE_DIRS:
+  // a single merged sort would prefer upstream's release version over this
+  // fork's prerelease-suffixed one.
+  for (const root of cacheRoots) {
+    lines.push(
+      `for _V in "${root}"/[0-9]*/; do ` +
+      `[ -d "$_V" ] || continue; [ -e "\${_V}.orphaned_at" ] && continue; ` +
+      `_B=\${_V%/}; _B=\${_B##*/}; ` +
+      // Balanced (pattern) case form: an unmatched `)` inside the enclosing
+      // $(...) command substitution is a POSIX parser error.
+      `case "$_B" in (*-*) _G=0;; (*) _G=1;; esac; ` +
+      `_N=\${_B%%-*}; _M1=\${_N%%.*}; ` +
+      `case "$_N" in (*.*) _T=\${_N#*.};; (*) _T=0;; esac; _M2=\${_T%%.*}; ` +
+      `case "$_T" in (*.*) _U=\${_T#*.};; (*) _U=0;; esac; _M3=\${_U%%.*}; ` +
+      `_M1=\${_M1%%[!0-9]*}; _M2=\${_M2%%[!0-9]*}; _M3=\${_M3%%[!0-9]*}; ` +
+      `printf '%08d%08d%08d%d %s\\n' "\${_M1:-0}" "\${_M2:-0}" "\${_M3:-0}" "$_G" "$_V"; ` +
+      `done 2>/dev/null | sort -r | sed 's/^[^ ]* //';`
+    );
+  }
+  // `printf '%s\n' a b` reuses the format per operand, so one printf emits one
+  // marketplace candidate line per MARKETPLACE_DIRS entry, in the same order.
+  const marketplacePaths = MARKETPLACE_DIRS
+    .map((dir) => `"$_C/plugins/marketplaces/${dir}/plugin"`)
+    .join(' ');
+  lines.push(`printf '%s\\n' ${marketplacePaths};`);
 
   // The MCP loop trims a trailing slash inline; the hook loop trims via _R="${_R%/}".
   const trimAssignment = isMcp ? '' : ' _R="${_R%/}";';
@@ -200,9 +242,11 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
   const candidates = (options.mcpExtraCandidates ?? []).map(shTokenToNode);
   const cacheRoots = [
     ...(options.mcpExtraCacheRoots ?? []),
-    '$_C/plugins/cache/thedotmack/claude-mem',
+    ...MARKETPLACE_DIRS.map((dir) => `$_C/plugins/cache/${dir}/claude-mem`),
   ].map(shTokenToNode);
-  const marketplace = shTokenToNode('$_C/plugins/marketplaces/thedotmack/plugin');
+  const marketplaces = MARKETPLACE_DIRS.map((dir) =>
+    shTokenToNode(`$_C/plugins/marketplaces/${dir}/plugin`)
+  );
   const require = JSON.stringify(options.requireFile);
   const notFound = JSON.stringify(`${options.notFoundMessage}\n`);
 
@@ -210,7 +254,7 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
     'E',
     ...candidates,
     ...cacheRoots.map((root) => `...L(${root})`),
-    marketplace,
+    ...marketplaces,
   ].join(',');
 
   return (
@@ -258,15 +302,15 @@ export function buildCodexWindowsCommand(
     "const C=process.env.CLAUDE_CONFIG_DIR||p.join(h,'.claude');",
     "const roots=[];",
     "for(const v of [process.env.CLAUDE_PLUGIN_ROOT,process.env.PLUGIN_ROOT])if(v)roots.push(v);",
-    "const cache=p.join(C,'plugins','cache','thedotmack','claude-mem');",
+    `const MK=${jsArray([...MARKETPLACE_DIRS])};`,
     // S/W mirror compareVersionsDescending in src/shared/worker-utils.ts and
     // the filter skips .orphaned_at-stamped cache dirs, same as
     // cacheWorkerScriptCandidates — every resolver ranking candidates
     // identically (by version, never mtime) is the restart-storm invariant.
     "const S=n=>{const q=n.split('-')[0].split('.');return[parseInt(q[0],10)||0,parseInt(q[1],10)||0,parseInt(q[2],10)||0]};",
     "const W=(a,b)=>{const x=S(a),y=S(b);return(y[0]-x[0])||(y[1]-x[1])||(y[2]-x[2])||((a.indexOf('-')<0?0:1)-(b.indexOf('-')<0?0:1))||(a<b?1:a>b?-1:0)};",
-    "try{roots.push(...fs.readdirSync(cache).filter(n=>{const ch=n.charAt(0);return ch>='0'&&ch<='9'}).map(n=>p.join(cache,n)).filter(r=>{try{return fs.statSync(r).isDirectory()&&!fs.existsSync(p.join(r,'.orphaned_at'))}catch{return false}}).sort((a,b)=>W(p.basename(a),p.basename(b))))}catch{}",
-    "roots.push(p.join(C,'plugins','marketplaces','thedotmack','plugin'));",
+    "for(const m of MK){const cache=p.join(C,'plugins','cache',m,'claude-mem');try{roots.push(...fs.readdirSync(cache).filter(n=>{const ch=n.charAt(0);return ch>='0'&&ch<='9'}).map(n=>p.join(cache,n)).filter(r=>{try{return fs.statSync(r).isDirectory()&&!fs.existsSync(p.join(r,'.orphaned_at'))}catch{return false}}).sort((a,b)=>W(p.basename(a),p.basename(b))))}catch{}}",
+    "for(const m of MK)roots.push(p.join(C,'plugins','marketplaces',m,'plugin'));",
     "let R=null;",
     "for(const k of roots){const r=fs.existsSync(p.join(k,'plugin','scripts'))?p.join(k,'plugin'):k;if(fs.existsSync(p.join(r,'scripts','bun-runner.js'))&&fs.existsSync(p.join(r,'scripts','worker-service.cjs'))){R=r;break}}",
     "if(!R){process.stderr.write('claude-mem: plugin scripts not found\\n');process.exit(1)}",
@@ -308,7 +352,38 @@ export function buildShellCommand(options: ShellTemplateOptions): string {
   parts.push('_C="${CLAUDE_CONFIG_DIR:-$HOME/.claude}";');
   parts.push('_E="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}";');
   parts.push(candidateBlock(options));
-  parts.push(`[ -n "$_P" ] || { echo "${options.notFoundMessage}" >&2; exit 1; };`);
+  // Discovery failure must leave a DURABLE trace, not just stderr.
+  //
+  // Every claude-mem log line and every sdk_sessions row is written by the
+  // worker — which lives behind the very resolution that just failed. So the
+  // old `echo >&2; exit 1` produced a hook that failed with nothing on disk to
+  // find afterwards: `doctor.sh`, the nightly bridge and any post-hoc audit all
+  // see a capturer that simply captured less, indistinguishable from a quiet
+  // day. (Claude Code does surface the first stderr line as a `<hook> hook
+  // error` notice on a non-2 exit, so an interactive operator sees it live;
+  // nobody reads stderr in headless / print / SDK runs, and nobody reads it
+  // tomorrow.)
+  //
+  // Append one worker-format line — `[ts] [ERROR] [HOOK  ] msg` — to the same
+  // daily log the worker writes, then fail exactly as before. Exit stays 1, NOT
+  // 2: on UserPromptSubmit exit 2 erases the user's prompt, and losing the
+  // prompt because the capturer is missing is a worse trade than losing the
+  // capture. Everything here is best-effort (`2>/dev/null`), so a read-only or
+  // absent log dir cannot make the failure worse than it already is.
+  //
+  // $CLAUDE_MEM_DATA_DIR mirrors resolveDataDir() in src/shared/paths.ts. The
+  // settings.json override that function also honours is deliberately NOT read
+  // here — a JSON parse in a hook prelude is not worth it for a breadcrumb.
+  parts.push(
+    `[ -n "$_P" ] || { ` +
+    `_L="\${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}/logs"; ` +
+    `mkdir -p "$_L" 2>/dev/null; ` +
+    `printf '[%s.000] [ERROR] [HOOK  ] %s | CLAUDE_PLUGIN_ROOT=%s | PLUGIN_ROOT=%s | CLAUDE_CONFIG_DIR=%s | cwd=%s\\n' ` +
+    `"$(date '+%Y-%m-%d %H:%M:%S')" "${options.notFoundMessage}" ` +
+    `"\${CLAUDE_PLUGIN_ROOT:-<unset>}" "\${PLUGIN_ROOT:-<unset>}" "$_C" "$PWD" ` +
+    `>>"$_L/claude-mem-$(date '+%Y-%m-%d').log" 2>/dev/null; ` +
+    `echo "${options.notFoundMessage}" >&2; exit 1; };`
+  );
 
   // cygpath conversion: claude-code + codex-cli. MCP returned early above (it
   // uses the Node launcher), so every host reaching here needs the clause.
