@@ -9,5 +9,10 @@
   },
   "enabledPlugins": {
     "weblapp-base@weblapp-kit": true
+  },
+  "$weblapp_profile": {
+    "profile": "base",
+    "lines": [],
+    "by": "weblapp-profile -- do not edit; rerun with a profile"
   }
 }
