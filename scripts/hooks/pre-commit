@@ -1,0 +1,47 @@
+#!/bin/sh
+# pre-commit — THE SECOND LAYER, and it exists because the first one is not a boundary.
+#
+# WHY A SECOND LAYER AT ALL. Every one of the kit's twelve guards runs in the agent harness:
+# they fire when Claude Code is about to run a tool. Trail of Bits, publishing their own Claude
+# Code configuration, states the limit plainly -- "hooks are guardrails, not security boundaries"
+# -- and both the practice and the literature say governance has to hold at more than one
+# boundary. Measured 2026-09-01: eleven of our twelve guards existed at exactly one. A commit
+# typed by a human in a terminal met none of them.
+#
+# WHY ONLY SECRETS HERE, AND NOTHING ELSE. A secret is the one failure that cannot be undone:
+# git does not forget, so the only remedy after the fact is revocation. Everything else our gates
+# check -- stale docs, chain violations, unverified trees -- is fixable with another commit. And
+# a pre-commit hook that ran the whole gate would cost 75-100 seconds on every hand commit, which
+# is how a gate earns its escape hatch and then means nothing. Narrow on purpose.
+#
+# WHY gitleaks AND NOT INSTEAD OF secrets-guard. Measured, not assumed. Against eight fabricated
+# credentials of the shapes this organisation actually uses:
+#   bare token, no surrounding context   ours 8/8   gitleaks 5/8
+#   realistic context (.env line, JSON)  ours 8/8   gitleaks 8/8  (three via generic-api-key)
+# Ours knows eight shapes and needs no context; gitleaks carries 150+ rules and leans on context.
+# Neither replaces the other, and they sit at different moments -- ours before the write, this
+# one before the commit.
+#
+# THREE OUTCOMES, NEVER TWO. Clean, leak, or "could not ask". A missing scanner is NOT a pass and
+# says so out loud -- but it does not block, because refusing every commit on a machine that has
+# not run bootstrap yet is how a hook gets deleted, and a deleted hook checks nothing forever.
+# The absence is meant to be loud in the log and visible to repo-health, not fatal at the prompt.
+#
+# ESCAPE: `git commit --no-verify`. Deliberately the standard one rather than a token of our own
+# -- a second private escape is a second thing to learn and a second thing to forget.
+set -u
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  printf '\n  SORAMADIM: gitleaks kurulu degil -- sahnelenen dosyalar sir icin TARANMADI.\n'
+  printf '  Kur: brew install gitleaks   (ajan katmanindaki secrets-guard hala kosuyor,\n'
+  printf '  ama o yalniz sekiz deseni taniyor ve yalniz Claude oturumlarinda vardir.)\n\n'
+  exit 0
+fi
+
+if ! gitleaks git --staged --no-banner --redact 2>&1; then
+  printf '\n  SIR SIZINTISI: yukaridaki bulgu SAHNELENEN degisiklikte.\n'
+  printf '  git bunu unutmaz -- commit edilirse tek care anahtari IPTAL ETMEK olur.\n'
+  printf '  Yanlis pozitifse: .gitleaks.toml allowlist, ya da satira `gitleaks:allow`.\n'
+  printf '  Sahibin karariyla atlamak icin: git commit --no-verify\n\n'
+  exit 1
+fi

@@ -1,0 +1,18 @@
+# gitleaks.toml -- the second layer's ruleset, shipped by weblapp-kit (weblapp-core/git-hooks/).
+# Copied into a repository by `weblapp-arm-precommit`; a repository that already carries its own
+# is never overwritten. gitleaks reads this file from the repository root by default.
+#
+# The default 150+ rules stay on. One thing is added: the kit's own escape token. A line carrying
+# `secrets-ok` declares itself a fixture to the agent-side guard (secrets-guard), and the same
+# word serves here so there is ONE escape to learn, not two. gitleaks's own `gitleaks:allow`
+# keeps working as well. Measured 2026-09-03 with gitleaks 8.30.1: a staged ghp_ token is
+# refused, the same line with secrets-ok passes, a clean stage passes -- and WITHOUT
+# regexTarget = "line" the allowlist matched nothing, because an allowlist regex is applied to
+# the secret itself by default, not to the line that carries it (measured, exit 1 in both forms).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "the kit's escape token: a line that declares itself a fixture"
+regexTarget = "line"
+regexes = ['''secrets-ok''']
