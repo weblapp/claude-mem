@@ -116,6 +116,15 @@ Two more changes live in `.claude-plugin/marketplace.json`:
   cmem.ai"*. We are not installing it, but leaving it listed means one careless
   `/plugin install` reopens everything the delta closed.
 
+## Cherry-picks ahead of upstream
+
+Commits taken from upstream before we take its version. Each one is already upstream, so the next
+rebase drops it; none of them is fork behaviour.
+
+| Commit | Why it could not wait |
+| --- | --- |
+| `ed2b39b4` (#3709, 2026-09-12) | The Observer could call `SendMessage` and `ListAgents`. On 2026-09-15 at 23:37 ours messaged a working session in another repository and asked it to run a pathspec-less `git commit`; that session declined. Three upstream reports say the same (#3566, #3708, #3812). The commit adds both tools to the deny-list, and its message records why the layered lockdown does not hold on the CLI spawn path: `tools`, `allowedTools` and `canUseTool` are SDK-only, so the deny-list is the sole enforcement there. |
+
 ## Keeping up to date
 
 ```bash
