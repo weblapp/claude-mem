@@ -5,10 +5,11 @@ Upstream is excellent and we track it closely; this fork exists for one reason a
 little difference as possible so that updating stays a rebase.
 
 **Current base: upstream `v13.25.3`** (npm `latest`, published 2026-09-21), shipped as
-`13.25.3-weblapp.2`. The fork is three commits on top of that tag: repository configuration, the
-delta this file describes, and the Grok Bot cut, which was found after `.1` had been pushed and
-went on top rather than into the delta so the machine's marketplace clone would not have to be
-rebuilt from scratch a second time. Squash the last two at the next rebase.
+`13.25.3-weblapp.2`. On top of that tag sit repository configuration, the delta this file
+describes, the Grok Bot cut (found after `.1` had been pushed; it went on top rather than into the
+delta so the machine's marketplace clone would not have to be rebuilt from scratch a second time),
+a documentation fix, and the removal of upstream's slide PDFs. At the next rebase they collapse
+into two: repository configuration, and the delta including the PDF removal.
 
 ## Why this fork exists
 
@@ -155,6 +156,23 @@ Two more changes live in `.claude-plugin/marketplace.json`:
   cmem.ai"*. We are not installing it, but leaving it listed means one careless
   `/plugin install` reopens everything the delta closed.
 
+### The distribution carries no slide decks
+
+**Added 2026-09-24, owner's call on the agent's recommendation.** `claude plugin marketplace update`
+does not fetch: it re-clones the whole repository at depth 1 and swaps the clone in, every time.
+On 13.25.3 that clone was 129 MB, and 117.3 MB of the 143 MB tree was eight rendered slide decks
+under `plans/` (`plans/hackathon/*.pdf` and two `plans/2026-07-1*-slides.pdf`). On this machine's
+link (~160 KB/s) the first update failed at the 600-second clone limit and the second took 14
+minutes. Nothing references the PDFs — their Markdown sources stay — and upstream touched none of
+them in the 259 commits between 13.17.2 and 13.25.3, so deleting them costs a rebase nothing.
+
+After every rebase, drop any PDF that came back and look at the clone size before pushing:
+
+```bash
+git ls-tree -r --name-only HEAD | grep '\.pdf$'      # expect nothing
+git rm -q -- $(git ls-tree -r --name-only HEAD | grep '\.pdf$')
+```
+
 ## Cherry-picks ahead of upstream
 
 None on this base. The last one, `ed2b39b4` (#3709: the Observer may no longer call `SendMessage`
@@ -256,9 +274,18 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    rebase. The count is the check — a new failure outside this table is a regression.
 
 7. **Commit, verify discovery, push.** `bash scripts/verify-plugin-root-discovery.sh` reads the
-   committed `HEAD`, so it runs after the delta commit. Keep the old `main` reachable before
-   replacing it (`git push origin main:refs/heads/archive/<old-version>`), then
+   committed `HEAD`, so it runs after the delta commit. Remove any PDF upstream added (see "The
+   distribution carries no slide decks"). Keep the old `main` reachable before replacing it
+   (`git push origin main:refs/heads/archive/<old-version>`), then
    `git push --force-with-lease=main:<old-sha> origin weblapp/<ver>:main`.
+
+8. **Install, then restart every session.** Run `claude plugin marketplace update
+   weblapp-claude-mem` with `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` raised (it re-clones every time),
+   then `claude plugin update claude-mem@weblapp-claude-mem --scope user`. The worker does not
+   switch by itself: the old version's hooks replace a version-mismatched worker on every call,
+   with no guard against repeating, so every session still running the old hooks keeps pulling
+   the old worker back. Restart them all, then check `curl -s 127.0.0.1:37701/api/version`. On
+   2026-09-24 the switch happened at the first hook after the restart, and the migrations ran then.
 
 **If the delta grows, that is a warning.** This fork exists to remove outbound paths and to keep a
 capturer quiet, not to develop features. The six cuts added on this base are the right kind:
