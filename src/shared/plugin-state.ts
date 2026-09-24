@@ -4,8 +4,11 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
 import { parseJsonWithBom } from './atomic-json.js';
+import { MARKETPLACE_DIRS } from '../build/hook-shell-template.js';
 
-const PLUGIN_SETTINGS_KEY = 'claude-mem@thedotmack';
+// weblapp delta (DELTA.md, "The cost of the rename"): Claude Code keys a plugin
+// as <plugin>@<marketplace>, and this fork's marketplace is MARKETPLACE_DIRS[0].
+const PLUGIN_SETTINGS_KEY = `claude-mem@${MARKETPLACE_DIRS[0]}`;
 
 export function isPluginDisabledInClaudeSettings(): boolean {
   try {

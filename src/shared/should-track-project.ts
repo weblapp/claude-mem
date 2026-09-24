@@ -4,24 +4,22 @@ import { isProjectExcluded } from '../utils/project-filter.js';
 import { loadFromFileOnce } from './hook-settings.js';
 import {
   CLAUDE_CONFIG_DIR,
-  MARKETPLACE_ROOT,
   OBSERVER_SESSIONS_DIR,
   OBSERVER_SESSIONS_PROJECT,
 } from './paths.js';
+import { MARKETPLACE_DIRS } from '../build/hook-shell-template.js';
 
 const PLUGINS_DIR_NAME = 'plugins';
 const PLUGIN_CACHE_DIR_NAME = 'cache';
-const CLAUDE_MEM_PLUGIN_OWNER = 'thedotmack';
 const CLAUDE_MEM_PLUGIN_NAME = 'claude-mem';
 const PLUGIN_RUNTIME_DIR_NAME = 'plugin';
-const PLUGIN_CACHE_ROOT = join(
-  CLAUDE_CONFIG_DIR,
-  PLUGINS_DIR_NAME,
-  PLUGIN_CACHE_DIR_NAME,
-  CLAUDE_MEM_PLUGIN_OWNER,
-  CLAUDE_MEM_PLUGIN_NAME,
-);
-const PLUGIN_MARKETPLACE_PLUGIN_ROOT = join(MARKETPLACE_ROOT, PLUGIN_RUNTIME_DIR_NAME);
+// weblapp delta (DELTA.md, "The cost of the rename"): the plugin's own cache and
+// marketplace directories under every name it may be installed as; upstream
+// names only `thedotmack`, so this fork's own directories were being tracked.
+const PLUGIN_OWN_ROOTS = MARKETPLACE_DIRS.flatMap((marketplace) => [
+  join(CLAUDE_CONFIG_DIR, PLUGINS_DIR_NAME, PLUGIN_CACHE_DIR_NAME, marketplace, CLAUDE_MEM_PLUGIN_NAME),
+  join(CLAUDE_CONFIG_DIR, PLUGINS_DIR_NAME, 'marketplaces', marketplace, PLUGIN_RUNTIME_DIR_NAME),
+]);
 
 function isWithin(child: string, parent: string): boolean {
   const normChild = normalize(child);
@@ -37,7 +35,7 @@ export function shouldTrackProject(cwd: string): boolean {
   if (isWithin(cwd, OBSERVER_SESSIONS_DIR)) {
     return false;
   }
-  if (isWithin(cwd, PLUGIN_CACHE_ROOT) || isWithin(cwd, PLUGIN_MARKETPLACE_PLUGIN_ROOT)) {
+  if (PLUGIN_OWN_ROOTS.some((root) => isWithin(cwd, root))) {
     return false;
   }
   const settings = loadFromFileOnce();

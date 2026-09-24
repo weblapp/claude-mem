@@ -5,11 +5,12 @@ Upstream is excellent and we track it closely; this fork exists for one reason a
 little difference as possible so that updating stays a rebase.
 
 **Current base: upstream `v13.25.3`** (npm `latest`, published 2026-09-21), shipped as
-`13.25.3-weblapp.2`. On top of that tag sit repository configuration, the delta this file
+`13.25.3-weblapp.3`. On top of that tag sit repository configuration, the delta this file
 describes, the Grok Bot cut (found after `.1` had been pushed; it went on top rather than into the
 delta so the machine's marketplace clone would not have to be rebuilt from scratch a second time),
-a documentation fix, and the removal of upstream's slide PDFs. At the next rebase they collapse
-into two: repository configuration, and the delta including the PDF removal.
+a documentation fix, the removal of upstream's slide PDFs, and the runtime half of the rename's
+cost (`.3`). At the next rebase they collapse into two: repository configuration, and the delta
+including the PDF removal.
 
 ## Why this fork exists
 
@@ -132,9 +133,44 @@ revert them:
 `scripts/verify-plugin-root-discovery.sh` checks both on the committed `HEAD`, without building or
 installing anything.
 
+**The runtime half — added 2026-09-24 (13.25.3-weblapp.3).** The generator was not the only code
+that knew upstream's marketplace name. The worker-script resolver in `src/shared/worker-utils.ts`,
+which every hook's lazy-spawn, the MCP server and the version check consult, read
+`plugins/cache/thedotmack/claude-mem`, then `plugins/marketplaces/thedotmack/plugin`, then the
+session's cwd. On this machine all three are empty, so `resolveWorkerScript()` returned `null`, and
+this one was live, not latent. Measured 2026-09-24: the worker stopped at 14:28 and at 15:00
+(SIGTERM; it goes when the process that spawned it goes), every hook after that logged *"Cannot
+lazy-spawn worker: worker-service.cjs not found in plugin/scripts"* (447 lines between 14:29 and
+16:02, none while the worker was up), and nothing was captured from 14:27 until a restart's
+`SessionStart` hook, which resolves through `CLAUDE_PLUGIN_ROOT` and the generator's list, brought
+it back at 16:02. `pending_messages` was empty: those hours were lost, not queued.
+
+Three runtime sites now read the generator's `MARKETPLACE_DIRS` instead of the literal, so there is
+still one list:
+
+- `resolveWorkerScript()` stages the cache and marketplace candidates per entry, ours first. Within
+  a stage upstream's highest-version rule holds; across stages it must not, for the same
+  release-beats-prerelease reason as above. It takes the plugins directory as a parameter so the
+  staging can be tested.
+- `isPluginDisabledInClaudeSettings()` reads `claude-mem@weblapp-claude-mem`, the key Claude Code
+  writes for this fork; upstream's key names a plugin this machine does not have.
+- `shouldTrackProject()` leaves the plugin's own cache and marketplace directories untracked under
+  both names; upstream's list named only `thedotmack`, so this fork's own directories were tracked.
+
+`tests/weblapp-marketplace-dirs.test.ts` (ours, eight tests) fails on `.2` and passes on `.3`.
+
+46 non-test lines still say `thedotmack`, read on 2026-09-24. `MARKETPLACE_ROOT` in `paths.ts`
+keeps upstream's name: the resolver only derives the plugins directory from it, and its other
+readers are installers this machine does not run. Two are latent and left alone: the MCP server's
+missing-marketplace diagnostic logs only when upstream's cache exists without its marketplace,
+which cannot happen here (0 lines in the day's log), and the context builder's native-rebuild
+recovery deletes an install marker under upstream's marketplace, so on a native-module load
+failure here the "restart to auto-fix" advice would not fix. The rest are URLs, comments, the
+uninstaller and the other installers.
+
 ### Version suffix
 
-The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.2`). `package.json` is the
+The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.3`). `package.json` is the
 source; `npm run build` syncs the Claude, Codex and Cursor manifests from it, and
 `.claude-plugin/marketplace.json`, `.grok-plugin/plugin.json` and `openclaw/openclaw.plugin.json`
 are set by hand — eleven files in all, and `git grep '"13\.25\.3"'` finds any that was missed.
@@ -222,7 +258,10 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    from upstream differs because of us. On 13.25.3-weblapp.2: `server-service.cjs` and
    `mcp-server.cjs` differ only in the version string (put `13.25.3` back and they are
    byte-identical); `viewer-bundle.js` and `context-generator.cjs` are unchanged;
-   `worker-service.cjs` and `transcript-watcher.cjs` carry the cuts.
+   `worker-service.cjs` and `transcript-watcher.cjs` carry the cuts. For `.3`, built once before
+   the version bump to see the change alone: `worker-service.cjs`, `mcp-server.cjs` and
+   `transcript-watcher.cjs` carry the runtime half of the rename, `server-service.cjs` differs from
+   `.2` only in the version string, and `hooks.json` is unchanged.
 
 5. **Verify the cuts in the bundle, not the source.** Names are minified, so grep for behaviour:
 
@@ -246,6 +285,10 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    grep -oE '.{60}Grok Bot INDEX notify skipped' $W             # ours: function qT(){if(!uie)try{...
    grep -oE 'async function [A-Za-z0-9_$]+\([a-z]=[A-Za-z0-9_$]+\(\),[a-z]=[A-Za-z0-9_$]+\(\),[a-z]=new Date\)\{if\([A-Za-z0-9_$]+\)return\[\]' $W
    grep -oE '\{try\{if\([A-Za-z0-9_$]+\|\|![a-z]\.enabled\)return;let [a-z]=[A-Za-z0-9_$]+\([a-z]\.agentId' $W
+   # rename, runtime half: one list, read by the resolver, the settings key and the own-roots filter
+   grep -o '"cache","thedotmack","claude-mem"' $W | wc -l       # .2: 1 -> ours 0
+   grep -o '\["weblapp-claude-mem","thedotmack"\]' $W | wc -l    # .2: 0 -> ours 1
+   grep -o 'claude-mem@\${[A-Za-z0-9_$]*\[0\]}' $W | wc -l      # .2: 0 -> ours 1 ("claude-mem@thedotmack": 1 -> 0)
    ```
 
    **`npm run build` is not optional, and this is the trap that nearly shipped a fake fork.** The
@@ -269,6 +312,11 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    | raw tool payloads not retained (`ingestObservation dual-write to tool_uses`) | 4 |
    | Grok Bot awareness off | 2 |
    | installer never logs in | 2 |
+   | rename, runtime half (`.3`): `isPluginDisabledInClaudeSettings (#781)` disables `claude-mem@thedotmack` | 1 |
+
+   On 13.25.3-weblapp.3: 3763 pass, 28 skip, 99 fail, 0 error across 3890 tests — the 98 failures
+   of `.2` unchanged, the one row added above, and the eight tests of
+   `tests/weblapp-marketplace-dirs.test.ts` passing.
 
    We do not edit upstream's tests to make them pass: every edited test is a conflict at the next
    rebase. The count is the check — a new failure outside this table is a regression.

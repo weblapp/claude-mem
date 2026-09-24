@@ -6,6 +6,7 @@ import { logger } from "../utils/logger.js";
 import { HOOK_TIMEOUTS, getTimeout } from "./hook-constants.js";
 import { SettingsDefaultsManager, type SettingsDefaults } from "./SettingsDefaultsManager.js";
 import { MARKETPLACE_ROOT, DATA_DIR, resolveDataDir } from "./paths.js";
+import { MARKETPLACE_DIRS } from "../build/hook-shell-template.js";
 import { loadFromFileOnce } from "./hook-settings.js";
 import { validateWorkerPidFile, readOwnedWorkerPidInfo } from "../supervisor/index.js";
 import { emitBlockingError, emitDiagnostic } from "./hook-io.js";
@@ -341,7 +342,7 @@ export function compareVersionsDescending(a: string, b: string): number {
 }
 
 export function cacheWorkerScriptCandidates(
-  cacheRoot: string = path.join(path.dirname(path.dirname(MARKETPLACE_ROOT)), 'cache', 'thedotmack', 'claude-mem')
+  cacheRoot: string = path.join(path.dirname(path.dirname(MARKETPLACE_ROOT)), 'cache', MARKETPLACE_DIRS[0], 'claude-mem')
 ): WorkerScriptCandidate[] {
   try {
     return readdirSync(cacheRoot)
@@ -393,27 +394,43 @@ function readPackageVersion(packageJsonPath: string): string | null {
  * preserve the cache → marketplace → cwd precedence, and versionless
  * candidates rank behind every versioned one. The opt-in override exists for
  * local testing.
+ *
+ * weblapp delta (DELTA.md, "The cost of the rename"): upstream reads a single
+ * marketplace, `thedotmack`, and this fork installs as `weblapp-claude-mem`, so
+ * every candidate here pointed at nothing and no hook could respawn a dead
+ * worker (measured 2026-09-24: down from 15:00 to 16:02, nothing captured).
+ * The cache and marketplace candidates are staged per MARKETPLACE_DIRS entry,
+ * the generator's own list and order, ours first. Within a stage upstream's
+ * rule holds; across stages it must not, or upstream's release would outrank
+ * our prerelease. The cwd candidate stays last.
  */
-export function resolveWorkerScript(): WorkerScriptCandidate | null {
+export function resolveWorkerScript(
+  pluginsDir: string = path.dirname(path.dirname(MARKETPLACE_ROOT))
+): WorkerScriptCandidate | null {
   const override = process.env.CLAUDE_MEM_WORKER_SCRIPT_PATH?.trim();
   if (override) {
     if (existsSync(override)) return { scriptPath: override, version: null };
     logger.debug('SYSTEM', 'Ignoring missing CLAUDE_MEM_WORKER_SCRIPT_PATH override', { override });
   }
 
-  const candidates: WorkerScriptCandidate[] = [
-    ...cacheWorkerScriptCandidates(),
-    {
-      scriptPath: candidateWorkerScriptPath(path.join(MARKETPLACE_ROOT, 'plugin')),
-      version: readPackageVersion(path.join(MARKETPLACE_ROOT, 'package.json')),
-    },
+  for (const marketplace of MARKETPLACE_DIRS) {
+    const marketplaceRoot = path.join(pluginsDir, 'marketplaces', marketplace);
+    const staged = selectWorkerScript([
+      ...cacheWorkerScriptCandidates(path.join(pluginsDir, 'cache', marketplace, 'claude-mem')),
+      {
+        scriptPath: candidateWorkerScriptPath(path.join(marketplaceRoot, 'plugin')),
+        version: readPackageVersion(path.join(marketplaceRoot, 'package.json')),
+      },
+    ]);
+    if (staged) return staged;
+  }
+
+  return selectWorkerScript([
     {
       scriptPath: path.join(process.cwd(), 'plugin', 'scripts', 'worker-service.cjs'),
       version: readPackageVersion(path.join(process.cwd(), 'package.json')),
     },
-  ];
-
-  return selectWorkerScript(candidates);
+  ]);
 }
 
 export function selectWorkerScript(candidates: WorkerScriptCandidate[]): WorkerScriptCandidate | null {
