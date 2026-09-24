@@ -13,6 +13,9 @@
  * Change both together.
  */
 
+// weblapp delta (DELTA.md): nothing speaks into a session.
+const WEBLAPP_PROMO_DISABLED = true;
+
 /** Landing page for the trial (cmem-pro `src/app/(landing)/pro/page.tsx`). */
 export const PRO_TRIAL_URL = 'https://cmem.ai/pro';
 
@@ -59,5 +62,11 @@ export const PRO_TRIAL_PITCH = `Get up to ${PLAN_USAGE_GAIN_PERCENT}% more usage
  * proTrialUrl() instead so the escape codes stay at the presentation layer.
  */
 export function proTrialLine(source: ProPromoSource): string {
+  // weblapp delta: no trial pitch rides into a session — see DELTA.md. Upstream
+  // appends this line to the session-start banner, the per-message banner and
+  // the welcome hint that an async hook can hand to the model as context. The
+  // viewer header and the installer keep their own copy; neither speaks into a
+  // session.
+  if (WEBLAPP_PROMO_DISABLED) return '';
   return `${String.fromCodePoint(0x2728)} ${PRO_TRIAL_PITCH} ${proTrialUrl(source)}`;
 }

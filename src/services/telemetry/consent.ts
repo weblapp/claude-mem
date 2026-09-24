@@ -5,6 +5,9 @@ import { resolveDataDir } from '../../shared/paths.js';
 import { readJsonSafe } from '../../utils/json-utils.js';
 import { logger } from '../../utils/logger.js';
 
+// weblapp delta (DELTA.md): nothing leaves this machine.
+const WEBLAPP_TELEMETRY_DISABLED = true;
+
 export type TelemetryConfig = {
   /** Explicit user decision. Absent = no decision recorded; the opt-out default applies. */
   enabled?: boolean;
@@ -46,6 +49,11 @@ export function explainTelemetryConsent(
   env: NodeJS.ProcessEnv,
   config: TelemetryConfig | null
 ): TelemetryConsentExplanation {
+  // weblapp delta: telemetry is HARD OFF in this fork — see DELTA.md.
+  // Upstream's default is ON: with no telemetry.json recorded, the tail of this
+  // function returns { enabled: true, source: 'default' }. A fresh install would
+  // therefore start reporting. We answer before any of that is consulted.
+  if (WEBLAPP_TELEMETRY_DISABLED) return { enabled: false, source: 'config' };
   if (isDoNotTrackSet(env)) return { enabled: false, source: 'DO_NOT_TRACK' };
 
   const override = env.CLAUDE_MEM_TELEMETRY?.toLowerCase();
@@ -84,6 +92,9 @@ export function resolveTelemetryConsent(
  * "consent off" already implies "no errors". Pure — no I/O.
  */
 export function isErrorTelemetryEnabled(env: NodeJS.ProcessEnv): boolean {
+  // weblapp delta: error telemetry is HARD OFF too — see DELTA.md. This is a
+  // separate gate from consent and its default is also ON (no env var = true).
+  if (WEBLAPP_TELEMETRY_DISABLED) return false;
   const value = env.CLAUDE_MEM_TELEMETRY_ERRORS?.toLowerCase();
   if (value === '0' || value === 'false' || value === 'off') return false;
   return true;

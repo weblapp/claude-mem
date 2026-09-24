@@ -133,7 +133,11 @@ function shellTemplateManifest(buildShellCommand, buildCodexWindowsCommand) {
         'SessionStart.0.1': claudeHook(['hook', 'claude-code', 'context']),
         'UserPromptSubmit.0.0': claudeHook(['hook', 'claude-code', 'session-init']),
         'PostToolUse.0.0': claudeHook(['hook', 'claude-code', 'observation']),
-        'PreToolUse.0.0': claudeHook(['hook', 'claude-code', 'file-context']),
+        // weblapp delta: no PreToolUse(Read) file-context hook — see DELTA.md.
+        // It hands prior observations about a file to the model on every Read,
+        // and no setting turns it off; this fork keeps claude-mem a capturer
+        // that never speaks into a session. The entry is also gone from
+        // plugin/hooks/hooks.json, so there is nothing for this map to fill.
         'Stop.0.0': claudeHook(['hook', 'claude-code', 'summarize']),
         'SessionEnd.0.0': claudeHook(['hook', 'claude-code', 'session-end']),
       },

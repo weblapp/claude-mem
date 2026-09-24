@@ -10,6 +10,9 @@ import { USER_SETTINGS_PATH, DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import type { DBSession } from '../worker-types.js';
 
+// weblapp delta (DELTA.md): nothing leaves this machine.
+const WEBLAPP_CLOUD_SYNC_DISABLED = true;
+
 export class DatabaseManager {
   private db: Database | null = null;
   private sessionStore: SessionStore | null = null;
@@ -27,7 +30,15 @@ export class DatabaseManager {
     // shared with SessionStore: sync_outbox rows are only ever deleted by
     // CloudSync's ack path, so an install without a CloudSync must not
     // produce mutation ops either — they would accumulate forever.
+    // weblapp delta: cloud sync is HARD OFF in this fork — see DELTA.md.
+    // Upstream activates it when token+user+hub are all set; a single wrong
+    // settings edit would turn it on. Our trees carry tracked signing secrets
+    // (measured 2026-08-29), and an "everything capturer" would ship them.
+    // Config can be flipped by accident; code cannot. Gating the predicate
+    // itself also keeps SessionStore from queueing outbox rows that nothing
+    // will ever send (249,642 rows, 81.5 MB, measured 2026-09-24 on 13.17.2).
     const cloudSyncConfigured =
+      !WEBLAPP_CLOUD_SYNC_DISABLED &&
       settings.CLAUDE_MEM_CLOUD_SYNC_TOKEN !== '' &&
       settings.CLAUDE_MEM_CLOUD_SYNC_USER_ID !== '' &&
       settings.CLAUDE_MEM_CLOUD_SYNC_HUB_URL.trim() !== '';

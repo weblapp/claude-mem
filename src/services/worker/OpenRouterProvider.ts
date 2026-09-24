@@ -14,6 +14,20 @@ import { ClassifiedProviderError, type ProviderErrorClass } from './provider-err
 import { withRetry, parseRetryAfterMs } from './retry.js';
 import { OpenAICompatibleProvider, type ProviderQueryResult } from './OpenAICompatibleProvider.js';
 
+// weblapp delta (DELTA.md): observations are never summarised through cmem.ai.
+const WEBLAPP_CMEM_GATEWAY_DISABLED = true;
+
+/** Gateway detection by origin (honours CMEM_PRO_ORIGIN) OR by the cmem.ai host itself. */
+function isCmemDestination(url: string): boolean {
+  if (isCmemGatewayUrl(url)) return true;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'cmem.ai' || host.endsWith('.cmem.ai');
+  } catch {
+    return false;
+  }
+}
+
 /**
  * OpenAI-compatible client configuration.
  *
@@ -496,6 +510,13 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
     attemptSignal: AbortSignal,
     plainText?: boolean,
   ): Promise<Response> {
+    // weblapp delta: the cmem.ai inference gateway is HARD OFF — see DELTA.md.
+    // Upstream reaches it when CLAUDE_MEM_OPENROUTER_BASE_URL points at cmem.ai,
+    // which CMEM Pro enrollment writes. This is the one place a request leaves,
+    // so the refusal sits here: no body is built, nothing is sent.
+    if (WEBLAPP_CMEM_GATEWAY_DISABLED && isCmemDestination(apiUrl)) {
+      return Promise.reject(new Error('weblapp delta: the cmem.ai gateway is disabled in this fork (DELTA.md)'));
+    }
     const body = buildOpenRouterRequestBody({ model, fallbackModels, messages, apiUrl, plainText });
     const maxOutputTokens = typeof body.max_tokens === 'number' ? body.max_tokens : 4096;
     return fetchWithOpenRouterTokenCompatibility(fetch, apiUrl, {

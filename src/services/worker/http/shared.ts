@@ -13,6 +13,9 @@ import { PrivacyCheckValidator } from '../validation/PrivacyCheckValidator.js';
 import { captureEvent } from '../../telemetry/telemetry.js';
 import { classifySkillId, skillNameFromToolInput } from '../../telemetry/skill-id.js';
 
+// weblapp delta (DELTA.md): no raw tool payload is kept after its observation is made.
+const WEBLAPP_TOOL_USES_DISABLED = true;
+
 interface IngestContext {
   sessionManager: SessionManager;
   dbManager: DatabaseManager;
@@ -148,7 +151,13 @@ export async function ingestObservation(payload: ObservationPayload): Promise<In
   // Best-effort by construction: an observation must still be generated if the
   // backup index write fails, so a throw here is logged and swallowed. Rows
   // without a tool_use_id are skipped by upsertToolUse (nothing to de-dupe on).
-  if (payload.toolUseId) {
+  //
+  // weblapp delta: the side index is OFF — see DELTA.md. It keeps every tool's
+  // raw input and response (up to 64 KB each) with no setting and no retention,
+  // so every .env read and every command output would stay on disk for good;
+  // measured 2026-09-24, a day on this machine is ~15,900 tool results and
+  // ~33 MB. Observations still come from the pending_messages queue below.
+  if (!WEBLAPP_TOOL_USES_DISABLED && payload.toolUseId) {
     try {
       store.upsertToolUse({
         toolUseId: payload.toolUseId,

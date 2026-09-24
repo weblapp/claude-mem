@@ -51,6 +51,9 @@ import {
   resolveCmemMemoryCredentials,
 } from '../cmem-memory-credentials.js';
 
+// weblapp delta (DELTA.md): no cmem.ai login, no funnel, no proxied provider.
+const WEBLAPP_TRIAL_FUNNEL_DISABLED = true;
+
 function getSetting<K extends keyof SettingsDefaults>(key: K): SettingsDefaults[K] {
   return SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH)[key];
 }
@@ -2211,8 +2214,20 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
   // Deliberately keyed on the explicit flag, not on reachability: a silent
   // fallback to a local install whenever cmem.ai is down would quietly change
   // what the user gets. This only skips a step the user's own flag made moot.
+  //
+  // weblapp delta: the installer never logs in to cmem.ai and never offers CMEM
+  // Pro — see DELTA.md. Upstream makes a cmem.ai OAuth login the first step of
+  // every install that does not name claude or host, then pre-selects CMEM Pro,
+  // whose enrollment rewrites the AI provider to the cmem gateway — so
+  // summarisation itself would run through their proxy. An install that names
+  // no provider runs as `--provider claude` would: memory on the user's own
+  // Anthropic plan, nothing asked, nothing posted. One that names gemini or
+  // openrouter keeps that choice and skips the login.
+  if (WEBLAPP_TRIAL_FUNNEL_DISABLED && !options.provider) {
+    options = { ...options, provider: 'claude' };
+  }
   let oauthPairing: InstallerOAuthPairing | null = null;
-  if (providerNeedsAccount(options.provider)) {
+  if (!WEBLAPP_TRIAL_FUNNEL_DISABLED && providerNeedsAccount(options.provider)) {
     oauthPairing = await requireInstallerOAuthLogin(version);
     if (!oauthPairing) {
       if (isInteractive) p.cancel('OAuth login is required to finish installation.');
