@@ -282,5 +282,8 @@ Codex hooks keep upstream's file-context entry; this machine has no Codex config
 
 **CCS Align was read and left alone.** It ships enabled (`CLAUDE_MEM_CCS_ALIGN_ENABLED='true'`),
 but it writes only under `~/.claude-mem/ccs-align/`, its patching of rule files is off by default
-(`CLAUDE_MEM_CCS_ALIGN_PATCH_SHADOWS='false'`), and on 13.25.3 nothing outside its own modules
-calls it. If a later release wires it in, read it again before taking that release.
+(`CLAUDE_MEM_CCS_ALIGN_PATCH_SHADOWS='false'`), and no code path in the worker or the hooks calls
+it on 13.25.3. It reaches a session as a skill instead (`plugin/skills/ccs-align`, listed as
+`claude-mem:ccs-align` once 13.25.3-weblapp.2 loaded, 2026-09-24): an hourly cycle an agent runs
+only when asked, talking to the local worker over curl. Nothing schedules it. If a later release
+wires it into the worker or schedules it, read it again before taking that release.
