@@ -5,8 +5,10 @@ Upstream is excellent and we track it closely; this fork exists for one reason a
 little difference as possible so that updating stays a rebase.
 
 **Current base: upstream `v13.25.3`** (npm `latest`, published 2026-09-21), shipped as
-`13.25.3-weblapp.1`. The fork is two commits on top of that tag: repository configuration, then
-the delta this file describes.
+`13.25.3-weblapp.2`. The fork is three commits on top of that tag: repository configuration, the
+delta this file describes, and the Grok Bot cut, which was found after `.1` had been pushed and
+went on top rather than into the delta so the machine's marketplace clone would not have to be
+rebuilt from scratch a second time. Squash the last two at the next rebase.
 
 ## Why this fork exists
 
@@ -47,6 +49,7 @@ which is simply not declared.
 | cmem.ai gateway *(new in 13.25.3)* | `src/services/worker/OpenRouterProvider.ts` | Observations are summarised through cmem.ai whenever `CLAUDE_MEM_OPENROUTER_BASE_URL` points there, which CMEM Pro enrollment writes | `WEBLAPP_CMEM_GATEWAY_DISABLED` refuses at the single request site, by origin or by host |
 | Read-time context *(new, 2026-09-24)* | `plugin/hooks/hooks.json`, `scripts/build-hooks.js` | A `PreToolUse(Read)` hook hands prior observations about the file to the model on every Read; no setting turns it off (the handler skips only subagents and excluded projects) | The hook is not declared, and the generator has no entry to fill |
 | Trial pitch *(new in 13.25.3)* | `src/shared/pro-promo.ts` | `proTrialLine()` rides on the session-start banner, the per-message banner and the welcome hint an async hook can hand to the model | `WEBLAPP_PROMO_DISABLED`: the line is empty. The viewer header and the installer keep their own copy; neither speaks into a session |
+| Grok Bot writers *(new since 13.17.2)* | `src/services/integrations/GrokBotAwarenessPusher.ts`, `GrokBotIndexWriter.ts` | Both ship enabled — awareness for two pilot agent ids, the INDEX for every agent (`'*'`) — and both resolve their data root by falling back to the worker's cwd when no Grok agent-data tree exists. On this machine that cwd is a product repository (measured 2026-09-24: the live worker ran from `~/Workspace/itravely`), so decision, bugfix and security lines would be written into a repo's working tree, one careless commit from leaving | `WEBLAPP_GROK_BOT_DISABLED` at the awareness entry point and at both INDEX entry points. Nothing wrote here yet: no pilot id matches our agents and no repository holds `agents/*/profile.json` |
 | Raw tool payloads *(new in 13.25.3)* | `src/services/worker/http/shared.ts` | Every observed tool use is also written to a `tool_uses` table with its raw input and response, up to 64 KB each; no setting turns it off and nothing ever deletes a row | `WEBLAPP_TOOL_USES_DISABLED`: the side index stays empty. Observations still come from the `pending_messages` queue, as before |
 
 The funnel cut matters more than it first looks: without it, a successful trial would route
@@ -130,7 +133,7 @@ installing anything.
 
 ### Version suffix
 
-The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.1`). `package.json` is the
+The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.2`). `package.json` is the
 source; `npm run build` syncs the Claude, Codex and Cursor manifests from it, and
 `.claude-plugin/marketplace.json`, `.grok-plugin/plugin.json` and `openclaw/openclaw.plugin.json`
 are set by hand — eleven files in all, and `git grep '"13\.25\.3"'` finds any that was missed.
@@ -198,7 +201,7 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    strings no longer match the generator.
 
 4. **Build and attribute every change.** With the pins still in place, any bundle that differs
-   from upstream differs because of us. On 13.25.3-weblapp.1: `server-service.cjs` and
+   from upstream differs because of us. On 13.25.3-weblapp.2: `server-service.cjs` and
    `mcp-server.cjs` differ only in the version string (put `13.25.3` back and they are
    byte-identical); `viewer-bundle.js` and `context-generator.cjs` are unchanged;
    `worker-service.cjs` and `transcript-watcher.cjs` carry the cuts.
@@ -221,6 +224,10 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    jq '.hooks | has("PreToolUse")' plugin/hooks/hooks.json       # false
    # raw tool payloads: the side-index write sits behind a constant-true flag (transcript-watcher too)
    grep -oE 'if\(![A-Za-z0-9_$]+&&[a-z]\.toolUseId\)try\{[a-z]\.upsertToolUse' $W   # upstream: no guard
+   # Grok Bot: all three entry points return first, each on a flag defined as !0
+   grep -oE '.{60}Grok Bot INDEX notify skipped' $W             # ours: function qT(){if(!uie)try{...
+   grep -oE 'async function [A-Za-z0-9_$]+\([a-z]=[A-Za-z0-9_$]+\(\),[a-z]=[A-Za-z0-9_$]+\(\),[a-z]=new Date\)\{if\([A-Za-z0-9_$]+\)return\[\]' $W
+   grep -oE '\{try\{if\([A-Za-z0-9_$]+\|\|![a-z]\.enabled\)return;let [a-z]=[A-Za-z0-9_$]+\([a-z]\.agentId' $W
    ```
 
    **`npm run build` is not optional, and this is the trap that nearly shipped a fake fork.** The
@@ -228,10 +235,10 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    patch in `src/` reaches nothing until the bundles are rebuilt. Measured 2026-08-29: after the
    first push, the installed plugin contained **zero** occurrences of our flags.
 
-6. **Run the suite and account for every new failure.** On 13.25.3-weblapp.1: 3758 pass, 28 skip,
-   96 fail, 0 error. One is upstream's own (`field deadline cancels real OpenRouter fetch`); the
+6. **Run the suite and account for every new failure.** On 13.25.3-weblapp.2: 3756 pass, 28 skip,
+   98 fail, 0 error. One is upstream's own (`field deadline cancels real OpenRouter fetch`); the
    baseline's other failure is a 5-second timeout that passed on this run, and the baseline's
-   error went with it. The 95 new ones are upstream tests asserting exactly what the delta
+   error went with it. The 97 new ones are upstream tests asserting exactly what the delta
    removes, and none is unexplained:
 
    | Cause | Failures |
@@ -242,6 +249,7 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    | version suffix (`version-consistency` expects bare `x.y.z`) | 7 |
    | hooks: the Read hook is gone and `Stop` blocks (three spawn-contract tests use the Read hook as their sample command) | 5 |
    | raw tool payloads not retained (`ingestObservation dual-write to tool_uses`) | 4 |
+   | Grok Bot awareness off | 2 |
    | installer never logs in | 2 |
 
    We do not edit upstream's tests to make them pass: every edited test is a conflict at the next
@@ -253,9 +261,10 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    `git push --force-with-lease=main:<old-sha> origin weblapp/<ver>:main`.
 
 **If the delta grows, that is a warning.** This fork exists to remove outbound paths and to keep a
-capturer quiet, not to develop features. The five cuts added on this base are the right kind:
-each is something upstream added since 13.17.2 that leaves the machine, speaks into a session,
-or keeps raw payloads the capturer has no use for once the observation exists. Anything else we want belongs upstream as a PR, or on our side in the bridge that writes
+capturer quiet, not to develop features. The six cuts added on this base are the right kind:
+each is something upstream added since 13.17.2 that leaves the machine, writes where it could
+leave through git, speaks into a session, or keeps raw payloads the capturer has no use for once
+the observation exists. Anything else we want belongs upstream as a PR, or on our side in the bridge that writes
 summaries into git.
 
 ## What we did not change
@@ -270,3 +279,8 @@ The hooks are upstream's except for three things recorded above: the plugin-root
 and its trace on failure, the blocking `Stop` hook, and the absent `PreToolUse(Read)` hook. The
 Codex hooks keep upstream's file-context entry; this machine has no Codex configuration at all
 (`~/.codex` absent, 2026-09-24).
+
+**CCS Align was read and left alone.** It ships enabled (`CLAUDE_MEM_CCS_ALIGN_ENABLED='true'`),
+but it writes only under `~/.claude-mem/ccs-align/`, its patching of rule files is off by default
+(`CLAUDE_MEM_CCS_ALIGN_PATCH_SHADOWS='false'`), and on 13.25.3 nothing outside its own modules
+calls it. If a later release wires it in, read it again before taking that release.

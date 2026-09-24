@@ -27,6 +27,9 @@ import {
 
 const DEFAULT_DEBOUNCE_MS = 1500;
 
+// weblapp delta (DELTA.md): no observation text is written into another agent's tree.
+const WEBLAPP_GROK_BOT_DISABLED = true;
+
 export interface GrokBotIndexConfig {
   enabled: boolean;
   agentIdsAuto: boolean;
@@ -276,6 +279,7 @@ export async function refreshGrokBotIndexes(
   queries: GrokBotIndexQueryFns = defaultIndexQueries(),
   now: Date = new Date(),
 ): Promise<GrokBotIndexRefreshResult[]> {
+  if (WEBLAPP_GROK_BOT_DISABLED) return [];
   if (!cfg.enabled) return [];
   const seats = resolveIndexSeats(cfg);
   const results: GrokBotIndexRefreshResult[] = [];
@@ -306,6 +310,11 @@ let refreshInFlight = false;
 let refreshQueued = false;
 
 export function notifyGrokBotIndex(): void {
+  // weblapp delta: the Grok Bot INDEX writer is HARD OFF — see DELTA.md. It
+  // ships enabled for every agent ('*'), and its root falls back to the
+  // worker's cwd, so any repository holding agents/<id>/profile.json would
+  // receive observation INDEX files in its working tree.
+  if (WEBLAPP_GROK_BOT_DISABLED) return;
   try {
     const cfg = loadGrokBotIndexConfig();
     if (!cfg.enabled) return;

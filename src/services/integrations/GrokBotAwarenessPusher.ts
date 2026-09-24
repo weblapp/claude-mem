@@ -6,6 +6,9 @@ import { USER_SETTINGS_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import { discoverGrokBotAgentDataRoot } from './GrokBotInstaller.js';
 
+// weblapp delta (DELTA.md): no observation text is written into another agent's tree.
+const WEBLAPP_GROK_BOT_DISABLED = true;
+
 export const GROK_BOT_AWARENESS_PILOT_AGENT_IDS = [
   '521e962d-2ec3-4488-bfbc-54d5209ce118', // LFG
   '95601360-61f7-4fd9-bb3a-2c976b2b85c0', // Orifice
@@ -144,6 +147,11 @@ export async function notifyGrokBotAwareness(
   config: GrokBotAwarenessPushConfig = loadGrokBotAwarenessConfig(),
 ): Promise<void> {
   try {
+    // weblapp delta: Grok Bot awareness is HARD OFF — see DELTA.md. It ships
+    // enabled, and when no Grok agent-data tree exists its root falls back to
+    // the worker's cwd, which on this machine is a product repository: the
+    // decision/bugfix/security lines it writes would land in a repo's tree.
+    if (WEBLAPP_GROK_BOT_DISABLED) return;
     if (!config.enabled) return;
 
     const agentId = resolvePilotAgentId(input.agentId, config.agentIds);
