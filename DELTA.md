@@ -5,12 +5,12 @@ Upstream is excellent and we track it closely; this fork exists for one reason a
 little difference as possible so that updating stays a rebase.
 
 **Current base: upstream `v13.25.3`** (npm `latest`, published 2026-09-21), shipped as
-`13.25.3-weblapp.3`. On top of that tag sit repository configuration, the delta this file
+`13.25.3-weblapp.4`. On top of that tag sit repository configuration, the delta this file
 describes, the Grok Bot cut (found after `.1` had been pushed; it went on top rather than into the
 delta so the machine's marketplace clone would not have to be rebuilt from scratch a second time),
-a documentation fix, the removal of upstream's slide PDFs, and the runtime half of the rename's
-cost (`.3`). At the next rebase they collapse into two: repository configuration, and the delta
-including the PDF removal.
+a documentation fix, the removal of upstream's slide PDFs, the runtime half of the rename's
+cost (`.3`), and the quota guard's session scope (`.4`). At the next rebase they collapse into two:
+repository configuration, and the delta including the PDF removal.
 
 ## Why this fork exists
 
@@ -170,7 +170,7 @@ uninstaller and the other installers.
 
 ### Version suffix
 
-The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.3`). `package.json` is the
+The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.4`). `package.json` is the
 source; `npm run build` syncs the Claude, Codex and Cursor manifests from it, and
 `.claude-plugin/marketplace.json`, `.grok-plugin/plugin.json` and `openclaw/openclaw.plugin.json`
 are set by hand — eleven files in all, and `git grep '"13\.25\.3"'` finds any that was missed.
@@ -209,6 +209,39 @@ git ls-tree -r --name-only HEAD | grep '\.pdf$'      # expect nothing
 git rm -q -- $(git ls-tree -r --name-only HEAD | grep '\.pdf$')
 ```
 
+### The quota guard decides on its own session's readings
+
+**Added 2026-09-26 (13.25.3-weblapp.4). A fix to upstream code, not a cut: offer it upstream, and
+drop it at the rebase whose base carries an equivalent.**
+
+Upstream's quota guard (#2234) writes every `rate_limit_event` into one process-wide
+`RateLimitStore`, last write wins per window, and `ClaudeProvider` asked that store whether to stop.
+But every observer session is a new Claude Code child that reads its OAuth credential from the
+keychain at spawn, and an event refreshes only its own `rateLimitType`. A window's reading therefore
+outlived the account that produced it.
+
+Measured 2026-09-26, the day the owner moved from one account to another for quota: account A's
+`seven_day` 0.93 stopped the observer at 13:12; the CLI login moved to account B at 13:27; at 13:42 a
+session spawned with B's token received `five_hour` 0.11 and was stopped with A's reading,
+*"quota:seven_day utilization 93.0% >= 93%"*, while B's weekly usage stood at 3%. The worker's
+`/api/health` showed both entries side by side. Nothing in the code replaces A's entry except a new
+`seven_day` event or a worker restart, so capture stayed off and the queue kept growing.
+
+The fix keeps one more store, per SDK session, and asks `shouldAbortForQuota` about that one. The
+process-wide store is still written, so `/api/health` and the one-event-per-rejection signal are
+unchanged, and a session is still stopped by the event that crosses a threshold. What a session no
+longer does is inherit another session's reading of a window its own events have not reported. In
+the two events measured, the window Claude Code reported was the one nearest its limit (A's
+`seven_day` warning, B's `five_hour`), so an account over a threshold still stops at its session's
+first event; the SDK does not document that choice.
+
+`tests/worker/quota-guard-session-scope.test.ts` replays the incident through `ClaudeProvider`: its
+first test fails on `.3` and passes on `.4`; the second holds a session to its own reading.
+
+Not taken: the per-window `unifiedWindows` utilizations that Claude Code 2.1.281 attaches to each
+event. They would have caught this case, but the SDK's published type (0.3.251) does not declare the
+field, and a guard that depends on it would fail silently the day it disappears.
+
 ## Cherry-picks ahead of upstream
 
 None on this base. The last one, `ed2b39b4` (#3709: the Observer may no longer call `SendMessage`
@@ -244,6 +277,27 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    Pass the pins as literal arguments. In zsh an unquoted `$PINS` does not split into words: npm
    received one argument, and it removed the Agent SDK.
 
+   **The six pins are not the whole environment** (measured 2026-09-26, building `.4`). By then
+   `node_modules` had drifted — Agent SDK 0.3.251, React 19.2.8, bullmq 5.81.4 among others — and
+   untouched `569487bc` (`.3`) rebuilt byte-identical only with nine more packages set to what `.3`
+   carries, two of them *older* than their newest release:
+
+   ```bash
+   npm install --no-save @anthropic-ai/claude-agent-sdk@0.3.278 posthog-node@5.52.5 \
+     @posthog/core@1.55.1 @modelcontextprotocol/sdk@1.30.0 hono@4.13.8 dompurify@3.4.15 \
+     bullmq@5.81.5 react@19.3.0 react-dom@19.3.0 zod@4.6.5 fast-uri@3.1.8 qs@6.16.0 \
+     proxy-addr@2.0.8 get-intrinsic@1.3.0 shell-quote@1.9.0
+   ```
+
+   How they were found, for the next drift: version strings the bundles embed (React `19.3.0` in
+   `viewer-bundle.js`, bullmq `5.81.5` in `server-service.cjs`); the bundle each package lands in
+   (a bundle that turns byte-identical vouches for every package in it — `mcp-server.cjs` did, for
+   `zod` and `fast-uri`); and, for what is left, each package's byte contribution to the bundle
+   (`qs` +305, `proxy-addr` +332, `get-intrinsic` +184 against a 637-byte gap). The sourcemaps the
+   build writes (`*.map`, never committed) list every bundled package directory, nested copies
+   included: `msgpackr`, `@ioredis/commands`, `cluster-key-slot` and `pgpass` are bundled from
+   copies their parents pin exactly, so their top-level versions do not matter.
+
 2. **Record the test baseline on the untouched tag** (`bun test tests`). On 13.25.3: 3852 pass,
    28 skip, 2 fail, 1 error, all upstream's own.
 
@@ -261,7 +315,10 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    `worker-service.cjs` and `transcript-watcher.cjs` carry the cuts. For `.3`, built once before
    the version bump to see the change alone: `worker-service.cjs`, `mcp-server.cjs` and
    `transcript-watcher.cjs` carry the runtime half of the rename, `server-service.cjs` differs from
-   `.2` only in the version string, and `hooks.json` is unchanged.
+   `.2` only in the version string, and `hooks.json` is unchanged. For `.4`, the same way: only
+   `worker-service.cjs` carries the quota guard's session scope; `server-service.cjs`,
+   `mcp-server.cjs` and `transcript-watcher.cjs` differ from `.3` only in the version string;
+   `viewer-bundle.js`, `context-generator.cjs` and `hooks.json` are unchanged.
 
 5. **Verify the cuts in the bundle, not the source.** Names are minified, so grep for behaviour:
 
@@ -289,6 +346,8 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    grep -o '"cache","thedotmack","claude-mem"' $W | wc -l       # .2: 1 -> ours 0
    grep -o '\["weblapp-claude-mem","thedotmack"\]' $W | wc -l    # .2: 0 -> ours 1
    grep -o 'claude-mem@\${[A-Za-z0-9_$]*\[0\]}' $W | wc -l      # .2: 0 -> ours 1 ("claude-mem@thedotmack": 1 -> 0)
+   # quota guard: the decision reads the session's own store, filled just before it is asked
+   grep -cE '\.set\([A-Za-z0-9_$]+\);let [A-Za-z0-9_$]+=[A-Za-z0-9_$]+\([A-Za-z0-9_$]+,[A-Za-z0-9_$]+\);if\([A-Za-z0-9_$]+\.abort\)' $W   # .3: 0 -> ours 1
    ```
 
    **`npm run build` is not optional, and this is the trap that nearly shipped a fake fork.** The
@@ -317,6 +376,12 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    On 13.25.3-weblapp.3: 3763 pass, 28 skip, 99 fail, 0 error across 3890 tests — the 98 failures
    of `.2` unchanged, the one row added above, and the eight tests of
    `tests/weblapp-marketplace-dirs.test.ts` passing.
+
+   On 13.25.3-weblapp.4, with the fifteen pins: 3765 pass, 28 skip, 99 fail, 0 error across 3892
+   tests. The same run on `.3` with the new test file: 3764 pass, 100 fail — the only difference is
+   the first test of `tests/worker/quota-guard-session-scope.test.ts`. Without the extra pins the
+   count read 101 fail and 1 error on both sides; drifted packages move this number too, so compare
+   runs only in the pinned environment.
 
    We do not edit upstream's tests to make them pass: every edited test is a conflict at the next
    rebase. The count is the check — a new failure outside this table is a regression.

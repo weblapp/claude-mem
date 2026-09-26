@@ -18,6 +18,7 @@ import {
 } from '../../supervisor/process-registry.js';
 import { sanitizeEnv } from '../../supervisor/env-sanitizer.js';
 import {
+  RateLimitStore,
   globalRateLimitStore,
   buildUsageLimitHitProps,
   extractRateLimitInfo,
@@ -321,6 +322,11 @@ export class ClaudeProvider {
       let turnDispatchedText = false;
       // One re-queue per generator pass for a batch a failed turn never read.
       let retriedAfterErrorResult = false;
+      // weblapp delta (DELTA.md, "The quota guard decides on its own session's readings"): the
+      // child reads its credential from the keychain at spawn, so a reading another session left
+      // in the process-wide store can belong to another account. The guard decides on this
+      // session's readings; the process-wide store still feeds the health surface.
+      const sessionRateLimits = new RateLimitStore();
 
       for await (const message of queryResult) {
         // Quota-aware wall-clock guard (#2234): the SDK pushes
@@ -349,7 +355,8 @@ export class ClaudeProvider {
               observed_billing: session.observedBilling,
             });
           }
-          const decision = shouldAbortForQuota(authMethod, globalRateLimitStore);
+          sessionRateLimits.set(info);
+          const decision = shouldAbortForQuota(authMethod, sessionRateLimits);
           if (decision.abort) {
             logger.warn('SDK', `Aborting session for quota guard: ${decision.reason}`, {
               sessionDbId: session.sessionDbId,
