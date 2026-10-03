@@ -200,7 +200,19 @@ export function buildIsolatedEnv(includeCredentials: boolean = true): Record<str
   // MARKETPLACE_ROOT, which stay derived solely from
   // process.env.CLAUDE_CONFIG_DIR at module load.
   const configDirSettings = SettingsDefaultsManager.loadFromFile(paths.settings());
-  isolatedEnv.CLAUDE_CONFIG_DIR = resolveEffectiveClaudeConfigDir(configDirSettings.CLAUDE_MEM_CLAUDE_CONFIG_DIR);
+  const effectiveConfigDir = resolveEffectiveClaudeConfigDir(configDirSettings.CLAUDE_MEM_CLAUDE_CONFIG_DIR);
+  // weblapp delta (13.25.3-weblapp.5): the DEFAULT profile reaches the subprocess as no
+  // CLAUDE_CONFIG_DIR at all. Claude Code looks up a different keychain item whenever the
+  // variable is set, even to the default path (measured 2026-10-03, 2.1.281 and 2.1.288:
+  // `CLAUDE_CONFIG_DIR=$HOME/.claude claude auth status` -> loggedIn false), while
+  // deriveMacKeychainServiceName reads the bare item for the default dir. Stamped, the default
+  // left a subprocess spawned without an expired token unable to find its own login, and it
+  // failed every batch until another CLI call renewed the token. A non-default dir is unchanged.
+  if (effectiveConfigDir === DEFAULT_CLAUDE_CONFIG_DIR) {
+    delete isolatedEnv.CLAUDE_CONFIG_DIR;
+  } else {
+    isolatedEnv.CLAUDE_CONFIG_DIR = effectiveConfigDir;
+  }
 
   if (includeCredentials) {
     const credentials = loadClaudeMemEnv();

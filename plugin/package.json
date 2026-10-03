@@ -1,6 +1,6 @@
 {
   "name": "claude-mem-plugin",
-  "version": "13.25.3-weblapp.4",
+  "version": "13.25.3-weblapp.5",
   "private": true,
   "description": "Runtime dependencies for claude-mem bundled hooks",
   "type": "module",

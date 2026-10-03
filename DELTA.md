@@ -5,11 +5,12 @@ Upstream is excellent and we track it closely; this fork exists for one reason a
 little difference as possible so that updating stays a rebase.
 
 **Current base: upstream `v13.25.3`** (npm `latest`, published 2026-09-21), shipped as
-`13.25.3-weblapp.4`. On top of that tag sit repository configuration, the delta this file
+`13.25.3-weblapp.5`. On top of that tag sit repository configuration, the delta this file
 describes, the Grok Bot cut (found after `.1` had been pushed; it went on top rather than into the
 delta so the machine's marketplace clone would not have to be rebuilt from scratch a second time),
 a documentation fix, the removal of upstream's slide PDFs, the runtime half of the rename's
-cost (`.3`), and the quota guard's session scope (`.4`). At the next rebase they collapse into two:
+cost (`.3`), the quota guard's session scope (`.4`), and the SDK subprocess's own login on the
+default profile (`.5`). At the next rebase they collapse into two:
 repository configuration, and the delta including the PDF removal.
 
 ## Why this fork exists
@@ -170,7 +171,7 @@ uninstaller and the other installers.
 
 ### Version suffix
 
-The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.4`). `package.json` is the
+The fork carries `-weblapp.N` on upstream's version (`13.25.3-weblapp.5`). `package.json` is the
 source; `npm run build` syncs the Claude, Codex and Cursor manifests from it, and
 `.claude-plugin/marketplace.json`, `.grok-plugin/plugin.json` and `openclaw/openclaw.plugin.json`
 are set by hand — eleven files in all, and `git grep '"13\.25\.3"'` finds any that was missed.
@@ -241,6 +242,42 @@ first test fails on `.3` and passes on `.4`; the second holds a session to its o
 Not taken: the per-window `unifiedWindows` utilizations that Claude Code 2.1.281 attaches to each
 event. They would have caught this case, but the SDK's published type (0.3.251) does not declare the
 field, and a guard that depends on it would fail silently the day it disappears.
+
+### The SDK subprocess finds its own login on the default profile
+
+**Added 2026-10-03 (13.25.3-weblapp.5). A fix to upstream code. The owner chose to keep it as a
+fork delta and not to offer it upstream; drop it at the rebase whose base carries an equivalent.**
+
+At every spawn `buildIsolatedEnvWithFreshOAuth()` reads the CLI's OAuth token from the keychain and
+refuses an expired one (#2215), so the subprocess starts without `CLAUDE_CODE_OAUTH_TOKEN` and has
+to find its own login. It could not: `buildIsolatedEnv()` stamped `CLAUDE_CONFIG_DIR` (#2753) even
+when the effective directory was the default `~/.claude`, and Claude Code looks up a different
+keychain item whenever that variable is set, whatever its value. Measured 2026-10-03 on Claude
+Code 2.1.281 and 2.1.288, in a clean environment: `CLAUDE_CONFIG_DIR=$HOME/.claude claude auth
+status` reports `loggedIn: false`, the same command without the variable `true`. The worker's own
+lookup (`deriveMacKeychainServiceName`) reads the bare item for the default directory; its
+subprocess looked somewhere else.
+
+The cost on this machine: the owner works in the desktop app, which does not renew the CLI's
+keychain token, and the token lives 8 hours. From each expiry until some CLI call renewed the
+token, the observer failed every batch with "Not logged in". On 2026-10-02 that was 13:38 to
+23:37: 1,316 authentication failures, and no observation synced between 14:00 and 22:59. A single
+`claude auth status` renewed the token (the keychain item was modified at 11:47:17 on 10-03), and
+the same worker injected fresh tokens again two minutes later, without a restart.
+
+The fix leaves `CLAUDE_CONFIG_DIR` out of the subprocess env when the effective directory is the
+default, and removes it when the blanket copy of the worker's env brought it in. The subprocess
+then uses the same bare item the worker reads. A non-default directory is stamped exactly as before.
+
+`tests/env-isolation.test.ts` pins it. Five tests fail on `.4` and pass on `.5`: four new ones (a
+setting naming the default, the default with a trailing separator, a parent-process value naming
+the default, the spawn-time builder) and the #2753 fall-through test, which now expects no variable
+for the default. A sixth holds a non-default directory to the old behaviour.
+
+Not yet measured: that the subprocess renews an expired token by itself, as `claude auth status`
+does. That needs `.5` installed and the next expiry. The closing measurement is a day whose worker
+log shows `Refusing to inject expired` followed by successful runs, with no CLI call in between, and
+on which the doctor's `capture` row in `weblapp/operation` reads OK.
 
 ## Cherry-picks ahead of upstream
 
@@ -318,7 +355,13 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    `.2` only in the version string, and `hooks.json` is unchanged. For `.4`, the same way: only
    `worker-service.cjs` carries the quota guard's session scope; `server-service.cjs`,
    `mcp-server.cjs` and `transcript-watcher.cjs` differ from `.3` only in the version string;
-   `viewer-bundle.js`, `context-generator.cjs` and `hooks.json` are unchanged.
+   `viewer-bundle.js`, `context-generator.cjs` and `hooks.json` are unchanged. For `.5`, built
+   after the bump and compared with the version string put back to `.4`: only
+   `worker-service.cjs` carries the change (the default profile's `CLAUDE_CONFIG_DIR`), and its
+   textual diff is large because the minifier renames identifiers across the bundle, so check it
+   by behaviour (step 5); `server-service.cjs`, `mcp-server.cjs` and `transcript-watcher.cjs`
+   differ from `.4` only in the version string; `context-generator.cjs`, `viewer-bundle.js` and
+   `hooks.json` are unchanged.
 
 5. **Verify the cuts in the bundle, not the source.** Names are minified, so grep for behaviour:
 
@@ -348,6 +391,8 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    grep -o 'claude-mem@\${[A-Za-z0-9_$]*\[0\]}' $W | wc -l      # .2: 0 -> ours 1 ("claude-mem@thedotmack": 1 -> 0)
    # quota guard: the decision reads the session's own store, filled just before it is asked
    grep -cE '\.set\([A-Za-z0-9_$]+\);let [A-Za-z0-9_$]+=[A-Za-z0-9_$]+\([A-Za-z0-9_$]+,[A-Za-z0-9_$]+\);if\([A-Za-z0-9_$]+\.abort\)' $W   # .3: 0 -> ours 1
+   # default profile: the subprocess env loses CLAUDE_CONFIG_DIR instead of getting it stamped
+   grep -cE '===[A-Za-z0-9_$]+\?delete [A-Za-z0-9_$]+\.CLAUDE_CONFIG_DIR:' $W   # .4: 0 -> ours 1
    ```
 
    **`npm run build` is not optional, and this is the trap that nearly shipped a fake fork.** The
@@ -382,6 +427,12 @@ git worktree add -b weblapp/<ver> <dir> v<ver>   # isolated; main is untouched u
    the first test of `tests/worker/quota-guard-session-scope.test.ts`. Without the extra pins the
    count read 101 fail and 1 error on both sides; drifted packages move this number too, so compare
    runs only in the pinned environment.
+
+   On 13.25.3-weblapp.5, same pins: 3770 pass, 28 skip, 99 fail, 0 error across 3897 tests, and the
+   99 are the same tests by name as on `.4` (3765 pass across 3892); the five new tests of
+   `tests/env-isolation.test.ts` are the difference. One earlier run read 100 fail and 1 error: a
+   5-second timeout in `tests/worker/sync/mutation-sites.test.ts` beside an unrelated SQLite open
+   error. That file passed alone five times out of five, and the next full run matched `.4`.
 
    We do not edit upstream's tests to make them pass: every edited test is a conflict at the next
    rebase. The count is the check — a new failure outside this table is a regression.

@@ -14,6 +14,9 @@ import { paths, CLAUDE_CONFIG_DIR, DEFAULT_CLAUDE_CONFIG_DIR, MARKETPLACE_ROOT }
 // CJS interop: the check is a .cjs module exporting findViolations.
 import { createRequire } from 'module';
 const requireCjs = createRequire(import.meta.url);
+
+// A config dir without its trailing separator(s), as resolveEffectiveClaudeConfigDir returns it.
+const stripSep = (dir: string): string => dir.replace(/[/\\]+$/, '') || dir;
 const { findViolations } = requireCjs('../scripts/check-spawn-env-discipline.cjs') as {
   findViolations: () => Array<{ file: string; line: number }>;
 };
@@ -293,7 +296,13 @@ describe('#2753: buildIsolatedEnv resolves CLAUDE_CONFIG_DIR for the SDK subproc
 
     const result = buildIsolatedEnv();
 
-    expect(result.CLAUDE_CONFIG_DIR).toBe(CLAUDE_CONFIG_DIR);
+    // weblapp delta (.5): the default profile reaches the subprocess as NO CLAUDE_CONFIG_DIR at all
+    // (see the describe block below); a non-default frozen value is still stamped as before.
+    if (stripSep(CLAUDE_CONFIG_DIR) === DEFAULT_CLAUDE_CONFIG_DIR) {
+      expect(result.CLAUDE_CONFIG_DIR).toBeUndefined();
+    } else {
+      expect(result.CLAUDE_CONFIG_DIR).toBe(stripSep(CLAUDE_CONFIG_DIR));
+    }
   });
 
   it('never touches the worker\'s own paths.CLAUDE_CONFIG_DIR / MARKETPLACE_ROOT module constants, nor the real process.env.CLAUDE_CONFIG_DIR', () => {
@@ -345,5 +354,81 @@ describe('#2753: buildIsolatedEnv resolves CLAUDE_CONFIG_DIR for the SDK subproc
     const result = buildIsolatedEnv();
 
     expect(result.CLAUDE_CONFIG_DIR).toBe('/tmp/from-setting-with-slash');
+  });
+});
+
+/**
+ * weblapp delta (13.25.3-weblapp.5): the DEFAULT profile reaches the SDK subprocess as no
+ * CLAUDE_CONFIG_DIR at all.
+ *
+ * deriveMacKeychainServiceName reads the bare "Claude Code-credentials" item for the default dir,
+ * but Claude Code itself looks elsewhere whenever CLAUDE_CONFIG_DIR is SET, whatever its value.
+ * Measured 2026-10-03 on Claude Code 2.1.281 and 2.1.288, in a clean environment:
+ * `CLAUDE_CONFIG_DIR=$HOME/.claude claude auth status` -> loggedIn false; without it -> true.
+ * So when readClaudeOAuthToken refuses an expired token, the tokenless subprocess could not find
+ * its own login and failed every batch with "Not logged in" until some other CLI call renewed the
+ * keychain item (2026-10-02: 13:38 to 23:37). Without the variable, the subprocess uses the same
+ * bare item the worker reads, and can renew an expired token itself.
+ */
+describe('weblapp delta: the default profile reaches the SDK subprocess as no CLAUDE_CONFIG_DIR', () => {
+  let loadFromFileSpy: ReturnType<typeof spyOn> | undefined;
+  let savedProcessEnvConfigDir: string | undefined;
+
+  function stubConfigDirSetting(value: string): void {
+    loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(
+      () => ({ ...SettingsDefaultsManager.getAllDefaults(), CLAUDE_MEM_CLAUDE_CONFIG_DIR: value }) as any
+    );
+  }
+
+  beforeEach(() => {
+    savedProcessEnvConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  });
+
+  afterEach(() => {
+    loadFromFileSpy?.mockRestore();
+    loadFromFileSpy = undefined;
+    if (savedProcessEnvConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = savedProcessEnvConfigDir;
+  });
+
+  it('a setting that names the default directory leaves CLAUDE_CONFIG_DIR out of the subprocess env', () => {
+    stubConfigDirSetting(DEFAULT_CLAUDE_CONFIG_DIR);
+
+    const result = buildIsolatedEnv();
+
+    expect('CLAUDE_CONFIG_DIR' in result).toBe(false);
+  });
+
+  it('the default directory written with a trailing separator is still the default', () => {
+    stubConfigDirSetting(`${DEFAULT_CLAUDE_CONFIG_DIR}/`);
+
+    const result = buildIsolatedEnv();
+
+    expect('CLAUDE_CONFIG_DIR' in result).toBe(false);
+  });
+
+  it('a parent-process CLAUDE_CONFIG_DIR naming the default is removed, not passed through by the blanket copy', () => {
+    process.env.CLAUDE_CONFIG_DIR = DEFAULT_CLAUDE_CONFIG_DIR;
+    stubConfigDirSetting(DEFAULT_CLAUDE_CONFIG_DIR);
+
+    const result = buildIsolatedEnv();
+
+    expect('CLAUDE_CONFIG_DIR' in result).toBe(false);
+  });
+
+  it('a non-default directory is still stamped onto the subprocess env (#2753 unchanged)', () => {
+    stubConfigDirSetting('/tmp/a-custom-profile');
+
+    const result = buildIsolatedEnv();
+
+    expect(result.CLAUDE_CONFIG_DIR).toBe('/tmp/a-custom-profile');
+  });
+
+  it('the spawn-time builder inherits the same rule', async () => {
+    stubConfigDirSetting(DEFAULT_CLAUDE_CONFIG_DIR);
+
+    const result = await buildIsolatedEnvWithFreshOAuth(false);
+
+    expect('CLAUDE_CONFIG_DIR' in result).toBe(false);
   });
 });
